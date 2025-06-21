@@ -1,34 +1,67 @@
 const express = require('express');
-const jsforce = require('jsforce');
-const app = express();
+const { spawn } = require('child_process');
+const { Client } = require('@modelcontextprotocol/sdk/client');
+const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio');
 
+const app = express();
 app.use(express.json());
 
-// Variables de entorno
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const PORT = process.env.PORT || 3000;
 
-// Conexión Salesforce
-let sfConnection = null;
+let mcpClient = null;
+let mcpTools = [];
+let mcpProcess = null;
 
-// Inicializar conexión Salesforce
-async function initSalesforceConnection() {
+// Inicializar MCP Client completo
+async function initMCPClient() {
   try {
-    console.log('🔗 Conectando a Salesforce...');
+    console.log('🔧 Iniciando MCP Client...');
     
-    sfConnection = new jsforce.Connection({
-      loginUrl: process.env.SALESFORCE_INSTANCE_URL || 'https://login.salesforce.com'
+    // Spawn del MCP server
+    mcpProcess = spawn('npx', ['-y', '@tsmztech/mcp-server-salesforce'], {
+      env: {
+        ...process.env,
+        SALESFORCE_CONNECTION_TYPE: "User_Password",
+        SALESFORCE_USERNAME: process.env.SALESFORCE_USERNAME,
+        SALESFORCE_PASSWORD: process.env.SALESFORCE_PASSWORD,
+        SALESFORCE_TOKEN: process.env.SALESFORCE_TOKEN,
+        SALESFORCE_INSTANCE_URL: process.env.SALESFORCE_INSTANCE_URL || "https://login.salesforce.com"
+      },
+      stdio: ['pipe', 'pipe', 'pipe']
     });
+
+    // Crear transport stdio
+    const transport = new StdioClientTransport({
+      stdin: mcpProcess.stdin,
+      stdout: mcpProcess.stdout,
+      stderr: mcpProcess.stderr
+    });
+
+    // Crear MCP client
+    mcpClient = new Client({
+      name: "salesforce-chatbot",
+      version: "1.0.0"
+    }, {
+      capabilities: {}
+    });
+
+    // Conectar
+    await mcpClient.connect(transport);
+    console.log('✅ MCP Client conectado');
+
+    // Obtener herramientas disponibles
+    const toolsResponse = await mcpClient.listTools();
+    mcpTools = toolsResponse.tools || [];
     
-    await sfConnection.login(
-      process.env.SALESFORCE_USERNAME,
-      process.env.SALESFORCE_PASSWORD + process.env.SALESFORCE_TOKEN
-    );
-    
-    console.log('✅ Conexión Salesforce exitosa');
+    console.log(`🛠️ Herramientas MCP disponibles: ${mcpTools.length}`);
+    mcpTools.forEach(tool => {
+      console.log(`   - ${tool.name}: ${tool.description}`);
+    });
+
     return true;
   } catch (error) {
-    console.error('❌ Error conectando Salesforce:', error);
+    console.error('❌ Error inicializando MCP Client:', error);
     return false;
   }
 }
@@ -36,79 +69,14 @@ async function initSalesforceConnection() {
 // Health check
 app.get('/', (req, res) => {
   res.json({ 
-    status: 'SF Chatbot MCP Server - DIRECT TOOLS',
+    status: 'SF Chatbot MCP Server - PROTOCOL COMPLETO',
     timestamp: new Date().toISOString(),
     claude_api: ANTHROPIC_API_KEY ? 'configured' : 'missing',
-    salesforce: sfConnection ? 'connected' : 'disconnected',
-    mode: 'direct_mcp_tools'
+    mcp_client: mcpClient ? 'connected' : 'disconnected',
+    mcp_tools: mcpTools.length,
+    available_tools: mcpTools.map(t => t.name)
   });
 });
-
-// Función salesforce_query_records (igual que la tuya)
-async function salesforce_query_records(objectName, fields, whereClause = null, orderBy = null, limit = null) {
-  try {
-    console.log('🔍 Ejecutando salesforce_query_records...');
-    
-    let soql = `SELECT ${fields.join(', ')} FROM ${objectName}`;
-    if (whereClause) soql += ` WHERE ${whereClause}`;
-    if (orderBy) soql += ` ORDER BY ${orderBy}`;
-    if (limit) soql += ` LIMIT ${limit}`;
-    
-    console.log('📊 SOQL:', soql);
-    
-    const result = await sfConnection.query(soql);
-    
-    console.log(`✅ Query exitoso: ${result.totalSize} registros`);
-    
-    return {
-      success: true,
-      records: result.records,
-      totalSize: result.totalSize,
-      soql: soql
-    };
-    
-  } catch (error) {
-    console.error('❌ Error en query:', error);
-    return {
-      success: false,
-      error: error.message,
-      soql: soql
-    };
-  }
-}
-
-// Función salesforce_aggregate_query (para COUNT, SUM, etc.)
-async function salesforce_aggregate_query(objectName, selectFields, groupByFields, whereClause = null, havingClause = null, limit = null) {
-  try {
-    console.log('📈 Ejecutando salesforce_aggregate_query...');
-    
-    let soql = `SELECT ${selectFields.join(', ')} FROM ${objectName}`;
-    if (whereClause) soql += ` WHERE ${whereClause}`;
-    if (groupByFields && groupByFields.length > 0) soql += ` GROUP BY ${groupByFields.join(', ')}`;
-    if (havingClause) soql += ` HAVING ${havingClause}`;
-    if (limit) soql += ` LIMIT ${limit}`;
-    
-    console.log('📊 SOQL Aggregate:', soql);
-    
-    const result = await sfConnection.query(soql);
-    
-    console.log(`✅ Aggregate query exitoso: ${result.totalSize} registros`);
-    
-    return {
-      success: true,
-      records: result.records,
-      totalSize: result.totalSize,
-      soql: soql
-    };
-    
-  } catch (error) {
-    console.error('❌ Error en aggregate query:', error);
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-}
 
 // Endpoint principal del chatbot
 app.post('/chat', async (req, res) => {
@@ -128,22 +96,22 @@ app.post('/chat', async (req, res) => {
       });
     }
 
-    if (!sfConnection) {
-      const connected = await initSalesforceConnection();
+    if (!mcpClient) {
+      const connected = await initMCPClient();
       if (!connected) {
         return res.json({
-          response: "Error: No puedo conectar con Salesforce. Verifica las credenciales.",
+          response: "Error: No puedo conectar con MCP. Verifica las credenciales de Salesforce.",
           mode: 'error'
         });
       }
     }
 
-    // Llamar a Claude con herramientas MCP
-    const claudeResponse = await callClaudeWithMCPTools(question);
+    // Llamar a Claude con herramientas MCP reales
+    const claudeResponse = await callClaudeWithRealMCP(question);
     
     res.json({ 
       response: claudeResponse,
-      mode: 'mcp_tools',
+      mode: 'mcp_protocol',
       timestamp: new Date().toISOString()
     });
     
@@ -156,12 +124,32 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// Función principal con herramientas MCP
-async function callClaudeWithMCPTools(question) {
+// Función para llamar a Claude con MCP protocol real
+async function callClaudeWithRealMCP(question) {
   try {
-    console.log('🤖 Llamando Claude con herramientas MCP...');
+    console.log('🤖 Iniciando conversación con Claude + MCP...');
     
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    // Convertir herramientas MCP al formato de Claude API
+    const claudeTools = mcpTools.map(tool => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.inputSchema
+    }));
+
+    console.log(`🛠️ Enviando ${claudeTools.length} herramientas a Claude`);
+
+    // Primera llamada a Claude
+    let messages = [
+      {
+        role: 'user',
+        content: `Soy un asistente de Salesforce. Responde esta pregunta usando las herramientas disponibles: "${question}"
+
+Usa las herramientas para obtener datos reales de Salesforce.
+Responde en español de forma directa con información específica.`
+      }
+    ];
+
+    let response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -171,48 +159,8 @@ async function callClaudeWithMCPTools(question) {
       body: JSON.stringify({
         model: 'claude-3-haiku-20240307',
         max_tokens: 1500,
-        messages: [
-          {
-            role: 'user',
-            content: `Soy un asistente de Salesforce. Responde esta pregunta: "${question}"
-
-Usa las herramientas disponibles para consultar datos reales de Salesforce.
-Responde en español de forma directa con los datos específicos.`
-          }
-        ],
-        tools: [
-          {
-            "name": "salesforce_query_records",
-            "description": "Query records from any Salesforce object using SOQL",
-            "input_schema": {
-              "type": "object",
-              "properties": {
-                "objectName": {"type": "string", "description": "API name of the object to query"},
-                "fields": {"type": "array", "items": {"type": "string"}, "description": "List of fields to retrieve"},
-                "whereClause": {"type": "string", "description": "WHERE clause, can include conditions on related objects"},
-                "orderBy": {"type": "string", "description": "ORDER BY clause"},
-                "limit": {"type": "number", "description": "Maximum number of records to return"}
-              },
-              "required": ["objectName", "fields"]
-            }
-          },
-          {
-            "name": "salesforce_aggregate_query", 
-            "description": "Execute SOQL queries with GROUP BY, aggregate functions, and statistical analysis",
-            "input_schema": {
-              "type": "object",
-              "properties": {
-                "objectName": {"type": "string", "description": "API name of the object to query"},
-                "selectFields": {"type": "array", "items": {"type": "string"}, "description": "Fields to select - mix of group fields and aggregates"},
-                "groupByFields": {"type": "array", "items": {"type": "string"}, "description": "Fields to group by"},
-                "whereClause": {"type": "string", "description": "WHERE clause to filter rows BEFORE grouping"},
-                "havingClause": {"type": "string", "description": "HAVING clause to filter results AFTER grouping"},
-                "limit": {"type": "number", "description": "Maximum number of grouped results to return"}
-              },
-              "required": ["objectName", "selectFields"]
-            }
-          }
-        ]
+        messages: messages,
+        tools: claudeTools
       })
     });
 
@@ -220,51 +168,58 @@ Responde en español de forma directa con los datos específicos.`
       throw new Error(`Claude API error: ${response.status}`);
     }
 
-    const data = await response.json();
-    console.log('📡 Claude response received');
+    let data = await response.json();
+    console.log('📡 Respuesta inicial de Claude recibida');
     
-    // Procesar tool calls
-    if (data.content && data.content.some(item => item.type === 'tool_use')) {
-      console.log('🛠️ Claude quiere usar herramientas');
+    // Procesar tool calls si existen
+    while (data.content && data.content.some(item => item.type === 'tool_use')) {
+      console.log('🔧 Claude quiere usar herramientas');
       
-      let toolResults = [];
-      let textContent = '';
+      // Agregar respuesta de Claude a los mensajes
+      messages.push({
+        role: 'assistant',
+        content: data.content
+      });
+
+      // Ejecutar tool calls
+      const toolResults = [];
       
       for (const item of data.content) {
         if (item.type === 'tool_use') {
-          console.log(`🔧 Ejecutando: ${item.name}`);
+          console.log(`⚡ Ejecutando: ${item.name} con:`, item.input);
           
-          let result;
-          if (item.name === 'salesforce_query_records') {
-            result = await salesforce_query_records(
-              item.input.objectName,
-              item.input.fields,
-              item.input.whereClause,
-              item.input.orderBy,
-              item.input.limit
-            );
-          } else if (item.name === 'salesforce_aggregate_query') {
-            result = await salesforce_aggregate_query(
-              item.input.objectName,
-              item.input.selectFields,
-              item.input.groupByFields,
-              item.input.whereClause,
-              item.input.havingClause,
-              item.input.limit
-            );
+          try {
+            // Usar MCP Client real para ejecutar la herramienta
+            const result = await mcpClient.callTool(item.name, item.input);
+            
+            console.log(`✅ Resultado de ${item.name}:`, result);
+            
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: item.id,
+              content: JSON.stringify(result.content)
+            });
+          } catch (toolError) {
+            console.error(`❌ Error ejecutando ${item.name}:`, toolError);
+            
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: item.id,
+              content: JSON.stringify({ error: toolError.message }),
+              is_error: true
+            });
           }
-          
-          toolResults.push({
-            tool_use_id: item.id,
-            content: JSON.stringify(result)
-          });
-        } else if (item.type === 'text') {
-          textContent += item.text;
         }
       }
-      
-      // Segunda llamada a Claude con resultados
-      const followUpResponse = await fetch('https://api.anthropic.com/v1/messages', {
+
+      // Agregar resultados de herramientas
+      messages.push({
+        role: 'user',
+        content: toolResults
+      });
+
+      // Nueva llamada a Claude con resultados
+      response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -274,47 +229,56 @@ Responde en español de forma directa con los datos específicos.`
         body: JSON.stringify({
           model: 'claude-3-haiku-20240307',
           max_tokens: 1500,
-          messages: [
-            {
-              role: 'user',
-              content: `Responde esta pregunta: "${question}"`
-            },
-            {
-              role: 'assistant',
-              content: data.content
-            },
-            {
-              role: 'user',
-              content: toolResults.map(r => ({
-                type: 'tool_result',
-                tool_use_id: r.tool_use_id,
-                content: r.content
-              }))
-            }
-          ]
+          messages: messages,
+          tools: claudeTools
         })
       });
-      
-      const followUpData = await followUpResponse.json();
-      return followUpData.content[0]?.text || 'Error procesando resultados';
-      
-    } else {
-      // Respuesta directa
-      return data.content[0]?.text || 'Error procesando respuesta';
+
+      if (!response.ok) {
+        throw new Error(`Claude API error: ${response.status}`);
+      }
+
+      data = await response.json();
+      console.log('📡 Nueva respuesta de Claude recibida');
     }
     
+    // Extraer respuesta final
+    const finalText = data.content
+      .filter(item => item.type === 'text')
+      .map(item => item.text)
+      .join(' ');
+    
+    return finalText || 'Error procesando respuesta final';
+    
   } catch (error) {
-    console.error('❌ Error en Claude + MCP tools:', error);
+    console.error('❌ Error en Claude + MCP real:', error);
     throw error;
   }
 }
+
+// Keepalive
+app.get('/keepalive', (req, res) => {
+  res.json({ status: 'alive', timestamp: new Date().toISOString() });
+});
+
+// Cleanup al cerrar
+process.on('SIGTERM', async () => {
+  console.log('🔄 Cerrando conexiones...');
+  if (mcpClient) {
+    await mcpClient.close();
+  }
+  if (mcpProcess) {
+    mcpProcess.kill();
+  }
+  process.exit(0);
+});
 
 // Inicializar servidor
 app.listen(PORT, async () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🔑 Claude API: ${ANTHROPIC_API_KEY ? 'Configurado' : 'Faltante'}`);
-  console.log(`⚡ Modo: HERRAMIENTAS MCP DIRECTAS`);
+  console.log(`⚡ Modo: MCP PROTOCOL COMPLETO`);
   
-  // Conectar a Salesforce al inicio
-  await initSalesforceConnection();
+  // Inicializar MCP Client
+  await initMCPClient();
 });
