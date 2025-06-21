@@ -1,7 +1,7 @@
 {
   "name": "sf-chatbot-mcp",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -9,10 +9,13 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Salesforce Chatbot with MCP Integration",
   "dependencies": {
-    "@tsmztech/mcp-server-salesforce": "latest",
+    "@tsmztech/mcp-server-salesforce": "^0.0.3",
     "@modelcontextprotocol/sdk": "^0.5.0",
-    "express": "^4.18.2"
+    "express": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
