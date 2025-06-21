@@ -12,7 +12,7 @@
   "description": "",
   "dependencies": {
     "@tsmztech/mcp-server-salesforce": "latest",
-    "express": "^4.18.2",
-    "jsforce": "^1.11.1"
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "express": "^4.18.2"
   }
 }
