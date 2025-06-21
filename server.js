@@ -1,6 +1,7 @@
 const express = require('express');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 app.use(express.json());
@@ -13,18 +14,40 @@ let mcpTools = [];
 let mcpProcess = null;
 
 // ——————————————
-// 1) Carga del SDK MCP desde dist
+// 1) Carga dinámica del SDK MCP probando varias rutas
 // ——————————————
 let Client, StdioClientTransport;
 try {
-  // Resolvemos la ruta del package.json del SDK
-  const sdkRoot = path.dirname(require.resolve('@modelcontextprotocol/sdk/package.json'));
-  const sdk = require(path.join(sdkRoot, 'dist/client/index.js'));
+  const sdkPkgPath = require.resolve('@modelcontextprotocol/sdk/package.json');
+  const sdkRoot = path.dirname(sdkPkgPath);
+
+  // Posibles rutas al bundle compilado
+  const candidates = [
+    'dist/client/index.js',
+    'dist/index.js',
+    'lib/index.js',
+    'build/index.js'
+  ];
+
+  let sdkEntry = null;
+  for (const rel of candidates) {
+    const full = path.join(sdkRoot, rel);
+    if (fs.existsSync(full)) {
+      sdkEntry = full;
+      break;
+    }
+  }
+
+  if (!sdkEntry) {
+    throw new Error(`No encontré dist/client/index.js ni ninguna ruta válida en ${sdkRoot}`);
+  }
+
+  const sdk = require(sdkEntry);
   Client = sdk.Client;
   StdioClientTransport = sdk.StdioClientTransport;
-  console.log('✅ MCP SDK cargado desde dist/client/index.js');
+  console.log(`✅ MCP SDK cargado desde ${sdkEntry}`);
 } catch (err) {
-  console.error('❌ No pude cargar MCP SDK desde dist:', err);
+  console.error('❌ No pude cargar MCP SDK:', err);
   process.exit(1);
 }
 
@@ -33,16 +56,16 @@ try {
 // ——————————————
 async function initMCPClient() {
   try {
-    console.log('🔧 Iniciando MCP Client...');
+    console.log('🔧 Iniciando MCP Client…');
 
     mcpProcess = spawn('npx', ['-y', '@tsmztech/mcp-server-salesforce'], {
       env: {
         ...process.env,
         SALESFORCE_CONNECTION_TYPE: process.env.SALESFORCE_CONNECTION_TYPE || "User_Password",
-        SALESFORCE_USERNAME: process.env.SALESFORCE_USERNAME,
-        SALESFORCE_PASSWORD: process.env.SALESFORCE_PASSWORD,
-        SALESFORCE_TOKEN: process.env.SALESFORCE_TOKEN,
-        SALESFORCE_INSTANCE_URL: process.env.SALESFORCE_INSTANCE_URL || "https://login.salesforce.com"
+        SALESFORCE_USERNAME:        process.env.SALESFORCE_USERNAME,
+        SALESFORCE_PASSWORD:        process.env.SALESFORCE_PASSWORD,
+        SALESFORCE_TOKEN:           process.env.SALESFORCE_TOKEN,
+        SALESFORCE_INSTANCE_URL:    process.env.SALESFORCE_INSTANCE_URL || "https://login.salesforce.com"
       },
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -51,7 +74,7 @@ async function initMCPClient() {
     mcpProcess.stderr.on('data', d => console.error('⚠️ MCP Server stderr:', d.toString()));
 
     const transport = new StdioClientTransport({
-      stdin: mcpProcess.stdin,
+      stdin:  mcpProcess.stdin,
       stdout: mcpProcess.stdout,
       stderr: mcpProcess.stderr
     });
@@ -121,11 +144,7 @@ app.post('/chat', async (req, res) => {
     }
 
     const answer = await callClaudeWithRealMCP(question);
-    res.json({
-      response:  answer,
-      mode:      'mcp_protocol',
-      timestamp: new Date().toISOString()
-    });
+    res.json({ response: answer, mode: 'mcp_protocol', timestamp: new Date().toISOString() });
 
   } catch (err) {
     console.error('❌ Error en /chat:', err);
@@ -137,15 +156,15 @@ app.post('/chat', async (req, res) => {
 });
 
 // ——————————————
-// 5) Lógica para llamar a Claude + MCP
+// 5) Lógica de llamada a Claude + MCP
 // ——————————————
 async function callClaudeWithRealMCP(question) {
   try {
     console.log('🤖 Iniciando conversación con Claude + MCP…');
 
     const claudeTools = mcpTools.map(t => ({
-      name:         t.name,
-      description:  t.description,
+      name:        t.name,
+      description: t.description,
       input_schema: t.inputSchema
     }));
 
@@ -157,12 +176,12 @@ Usa las herramientas para obtener datos reales de Salesforce.
 Responde en español de forma directa con información específica.`
     }];
 
-    // Usamos fetch global de Node 20+
+    // Node v20+ trae fetch global
     let resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Content-Type':     'application/json',
-        'x-api-key':         ANTHROPIC_API_KEY,
+        'Content-Type':      'application/json',
+        'x-api-key':          ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
@@ -181,28 +200,27 @@ Responde en español de forma directa con información específica.`
     let data = await resp.json();
     console.log('📡 Respuesta inicial de Claude recibida');
 
-    // Iteramos si Claude decide usar herramientas MCP
     while (data.content?.some(item => item.type === 'tool_use')) {
       console.log('🔧 Claude quiere usar herramientas');
       messages.push({ role: 'assistant', content: data.content });
 
       const toolResults = [];
-      for (let item of data.content) {
+      for (const item of data.content) {
         if (item.type === 'tool_use') {
           console.log(`⚡ Ejecutando ${item.name}`, item.input);
           try {
             const result = await mcpClient.callTool(item.name, item.input);
             toolResults.push({
-              type:         'tool_result',
-              tool_use_id:  item.id,
-              content:      JSON.stringify(result.content)
+              type:        'tool_result',
+              tool_use_id: item.id,
+              content:     JSON.stringify(result.content)
             });
           } catch (toolErr) {
             toolResults.push({
-              type:         'tool_result',
-              tool_use_id:  item.id,
-              content:      JSON.stringify({ error: toolErr.message }),
-              is_error:     true
+              type:        'tool_result',
+              tool_use_id: item.id,
+              content:     JSON.stringify({ error: toolErr.message }),
+              is_error:    true
             });
           }
         }
@@ -213,8 +231,8 @@ Responde en español de forma directa con información específica.`
       resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
-          'Content-Type':     'application/json',
-          'x-api-key':         ANTHROPIC_API_KEY,
+          'Content-Type':      'application/json',
+          'x-api-key':          ANTHROPIC_API_KEY,
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
@@ -233,7 +251,6 @@ Responde en español de forma directa con información específica.`
       console.log('📡 Nueva respuesta de Claude recibida');
     }
 
-    // Extraer sólo el texto final
     return (data.content || [])
       .filter(i => i.type === 'text')
       .map(i => i.text)
