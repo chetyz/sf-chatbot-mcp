@@ -1,5 +1,6 @@
 const express = require('express');
 const { spawn } = require('child_process');
+const path = require('path');
 
 const app = express();
 app.use(express.json());
@@ -12,15 +13,18 @@ let mcpTools = [];
 let mcpProcess = null;
 
 // ——————————————
-// 1) Carga del SDK MCP
+// 1) Carga del SDK MCP desde dist
 // ——————————————
 let Client, StdioClientTransport;
 try {
-  // tras parchear el package.json de sdk, esto apunta a dist/client/index.js
-  ({ Client, StdioClientTransport } = require('@modelcontextprotocol/sdk'));
-  console.log('✅ MCP SDK cargado con require()');
+  // Resolvemos la ruta del package.json del SDK
+  const sdkRoot = path.dirname(require.resolve('@modelcontextprotocol/sdk/package.json'));
+  const sdk = require(path.join(sdkRoot, 'dist/client/index.js'));
+  Client = sdk.Client;
+  StdioClientTransport = sdk.StdioClientTransport;
+  console.log('✅ MCP SDK cargado desde dist/client/index.js');
 } catch (err) {
-  console.error('❌ No pude cargar @modelcontextprotocol/sdk:', err);
+  console.error('❌ No pude cargar MCP SDK desde dist:', err);
   process.exit(1);
 }
 
@@ -34,7 +38,7 @@ async function initMCPClient() {
     mcpProcess = spawn('npx', ['-y', '@tsmztech/mcp-server-salesforce'], {
       env: {
         ...process.env,
-        SALESFORCE_CONNECTION_TYPE: "User_Password",
+        SALESFORCE_CONNECTION_TYPE: process.env.SALESFORCE_CONNECTION_TYPE || "User_Password",
         SALESFORCE_USERNAME: process.env.SALESFORCE_USERNAME,
         SALESFORCE_PASSWORD: process.env.SALESFORCE_PASSWORD,
         SALESFORCE_TOKEN: process.env.SALESFORCE_TOKEN,
@@ -52,7 +56,10 @@ async function initMCPClient() {
       stderr: mcpProcess.stderr
     });
 
-    mcpClient = new Client({ name: "salesforce-chatbot", version: "1.0.0" }, { capabilities: {} });
+    mcpClient = new Client(
+      { name: "salesforce-chatbot", version: "1.0.0" },
+      { capabilities: {} }
+    );
     await mcpClient.connect(transport);
     console.log('✅ MCP Client conectado');
 
@@ -73,8 +80,8 @@ async function initMCPClient() {
 // ——————————————
 app.get('/', (_req, res) => {
   res.json({
-    status: 'SF Chatbot MCP Server - PROTOCOL COMPLETO',
-    timestamp: new Date().toISOString(),
+    status:         'SF Chatbot MCP Server - PROTOCOL COMPLETO',
+    timestamp:      new Date().toISOString(),
     claude_api:     ANTHROPIC_API_KEY ? 'configured' : 'missing',
     mcp_client:     mcpClient    ? 'connected' : 'disconnected',
     mcp_tools:      mcpTools.length,
@@ -90,7 +97,9 @@ app.get('/', (_req, res) => {
 app.post('/chat', async (req, res) => {
   try {
     const { question } = req.body;
-    if (!question) return res.status(400).json({ error: 'Pregunta requerida' });
+    if (!question) {
+      return res.status(400).json({ error: 'Pregunta requerida' });
+    }
 
     console.log('📝 Pregunta recibida:', question);
 
@@ -112,24 +121,31 @@ app.post('/chat', async (req, res) => {
     }
 
     const answer = await callClaudeWithRealMCP(question);
-    res.json({ response: answer, mode: 'mcp_protocol', timestamp: new Date().toISOString() });
+    res.json({
+      response:  answer,
+      mode:      'mcp_protocol',
+      timestamp: new Date().toISOString()
+    });
 
   } catch (err) {
     console.error('❌ Error en /chat:', err);
-    res.status(500).json({ error: `Error del servidor: ${err.message}`, fallback: `Pregunta: ${req.body.question}` });
+    res.status(500).json({
+      error:    `Error del servidor: ${err.message}`,
+      fallback: `Pregunta: ${req.body.question}`
+    });
   }
 });
 
 // ——————————————
-// 5) Lógica de llamada a Claude + MCP
+// 5) Lógica para llamar a Claude + MCP
 // ——————————————
 async function callClaudeWithRealMCP(question) {
   try {
     console.log('🤖 Iniciando conversación con Claude + MCP…');
 
     const claudeTools = mcpTools.map(t => ({
-      name: t.name,
-      description: t.description,
+      name:         t.name,
+      description:  t.description,
       input_schema: t.inputSchema
     }));
 
@@ -141,18 +157,19 @@ Usa las herramientas para obtener datos reales de Salesforce.
 Responde en español de forma directa con información específica.`
     }];
 
+    // Usamos fetch global de Node 20+
     let resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
+        'Content-Type':     'application/json',
+        'x-api-key':         ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-haiku-20240307',
+        model:      'claude-3-haiku-20240307',
         max_tokens: 1500,
         messages,
-        tools: claudeTools
+        tools:      claudeTools
       })
     });
 
@@ -164,7 +181,7 @@ Responde en español de forma directa con información específica.`
     let data = await resp.json();
     console.log('📡 Respuesta inicial de Claude recibida');
 
-    // Si Claude decide usar herramientas…
+    // Iteramos si Claude decide usar herramientas MCP
     while (data.content?.some(item => item.type === 'tool_use')) {
       console.log('🔧 Claude quiere usar herramientas');
       messages.push({ role: 'assistant', content: data.content });
@@ -175,9 +192,18 @@ Responde en español de forma directa con información específica.`
           console.log(`⚡ Ejecutando ${item.name}`, item.input);
           try {
             const result = await mcpClient.callTool(item.name, item.input);
-            toolResults.push({ type: 'tool_result', tool_use_id: item.id, content: JSON.stringify(result.content) });
+            toolResults.push({
+              type:         'tool_result',
+              tool_use_id:  item.id,
+              content:      JSON.stringify(result.content)
+            });
           } catch (toolErr) {
-            toolResults.push({ type: 'tool_result', tool_use_id: item.id, content: JSON.stringify({ error: toolErr.message }), is_error: true });
+            toolResults.push({
+              type:         'tool_result',
+              tool_use_id:  item.id,
+              content:      JSON.stringify({ error: toolErr.message }),
+              is_error:     true
+            });
           }
         }
       }
@@ -187,15 +213,15 @@ Responde en español de forma directa con información específica.`
       resp = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_API_KEY,
+          'Content-Type':     'application/json',
+          'x-api-key':         ANTHROPIC_API_KEY,
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: 'claude-3-haiku-20240307',
+          model:      'claude-3-haiku-20240307',
           max_tokens: 1500,
           messages,
-          tools: claudeTools
+          tools:      claudeTools
         })
       });
 
@@ -207,7 +233,7 @@ Responde en español de forma directa con información específica.`
       console.log('📡 Nueva respuesta de Claude recibida');
     }
 
-    // Extraer sólo el texto
+    // Extraer sólo el texto final
     return (data.content || [])
       .filter(i => i.type === 'text')
       .map(i => i.text)
@@ -221,7 +247,7 @@ Responde en español de forma directa con información específica.`
 }
 
 // ——————————————
-// 6) Keepalive & cierre limpio
+// 6) Keepalive & limpieza
 // ——————————————
 app.get('/keepalive', (_req, res) => {
   res.json({ status: 'alive', timestamp: new Date().toISOString() });
@@ -229,8 +255,8 @@ app.get('/keepalive', (_req, res) => {
 
 process.on('SIGTERM', async () => {
   console.log('🔄 Cerrando conexiones…');
-  if (mcpClient)    await mcpClient.close();
-  if (mcpProcess)   mcpProcess.kill();
+  if (mcpClient)  await mcpClient.close();
+  if (mcpProcess) mcpProcess.kill();
   process.exit(0);
 });
 
@@ -246,5 +272,3 @@ app.listen(PORT, async () => {
   const ok = await initMCPClient();
   if (!ok) console.log('⚠️ El servidor está funcionando pero MCP no está disponible');
 });
-
-
