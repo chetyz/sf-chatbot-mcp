@@ -1,7 +1,7 @@
 const express = require('express');
 const { spawn } = require('child_process');
-const { Client } = require('@modelcontextprotocol/sdk/client');
-const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio');
+const { Client } = require('@modelcontextprotocol/sdk');
+const { StdioClientTransport } = require('@modelcontextprotocol/sdk');
 
 const app = express();
 app.use(express.json());
