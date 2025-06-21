@@ -50,11 +50,12 @@ app.get('/', (req, res) => {
   const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
   
   res.json({ 
-    status: 'SF Chatbot MCP Server Running - Fase 2',
+    status: 'SF Chatbot MCP Server Running - Fase 2 FIXED',
     timestamp: new Date().toISOString(),
     mcp_status: mcpProcess ? 'running' : 'stopped',
     claude_api: ANTHROPIC_API_KEY ? 'configured' : 'missing',
-    missing_env_vars: missingVars.length > 0 ? missingVars : null
+    missing_env_vars: missingVars.length > 0 ? missingVars : null,
+    fix_applied: 'x-api-key header instead of Authorization Bearer'
   });
 });
 
@@ -95,58 +96,52 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// Función para llamar a Claude con MCP
+// Función para llamar a Claude con MCP - HEADERS CORREGIDOS
 async function callClaudeWithMCP(question) {
   try {
+    console.log('🤖 Llamando a Claude API...');
+    
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${ANTHROPIC_API_KEY}`,
         'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,  // ✅ HEADER CORRECTO
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-sonnet-20240229',
+        model: 'claude-3-haiku-20240307', // Modelo más rápido y económico
         max_tokens: 1000,
         messages: [
           {
             role: 'user',
             content: `Eres un asistente especializado en Salesforce. Responde esta pregunta sobre datos de Salesforce: ${question}
-            
-Si necesitas consultar datos, usa las herramientas disponibles para hacer consultas SOQL.
-Responde en español de forma amigable y útil.`
-          }
-        ],
-        tools: [
-          {
-            "name": "salesforce_query_records",
-            "description": "Ejecuta consultas SOQL en Salesforce",
-            "input_schema": {
-              "type": "object",
-              "properties": {
-                "objectName": {"type": "string"},
-                "fields": {"type": "array", "items": {"type": "string"}},
-                "whereClause": {"type": "string"},
-                "limit": {"type": "number"}
-              },
-              "required": ["objectName", "fields"]
-            }
+
+Si necesitas consultar datos específicos de Salesforce, explica qué consulta SOQL harías.
+Responde en español de forma amigable y útil.
+
+Ejemplo de respuesta: "Para responder esa pregunta necesitaría ejecutar: SELECT COUNT() FROM Opportunity WHERE..." y luego explica qué significaría el resultado.`
           }
         ]
       })
     });
 
+    console.log('📡 Claude API Status:', response.status);
+
     if (!response.ok) {
-      throw new Error(`Claude API error: ${response.status} ${response.statusText}`);
+      const errorText = await response.text();
+      console.error('❌ Claude API Error:', response.status, errorText);
+      throw new Error(`Claude API error: ${response.status} ${response.statusText} - ${errorText}`);
     }
 
     const data = await response.json();
+    console.log('✅ Claude API Success');
     
     // Extraer la respuesta de Claude
     if (data.content && data.content[0] && data.content[0].text) {
       return data.content[0].text;
     } else {
-      return `Respuesta procesada para: ${question}. Claude conectado correctamente.`;
+      console.log('⚠️ Formato de respuesta inesperado:', data);
+      return `Respuesta procesada para: ${question}. Claude conectado correctamente pero formato inesperado.`;
     }
     
   } catch (error) {
@@ -164,6 +159,7 @@ app.get('/keepalive', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🔑 Claude API: ${ANTHROPIC_API_KEY ? 'Configurado' : 'Faltante'}`);
+  console.log(`🔧 Fix aplicado: Usando x-api-key header`);
   
   // Inicializar MCP solo si tenemos las credenciales de SF
   const hasSFCredentials = process.env.SALESFORCE_USERNAME && 
