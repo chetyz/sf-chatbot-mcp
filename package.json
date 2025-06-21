@@ -1,0 +1,17 @@
+{
+  "name": "sf-chatbot-mcp",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@tsmztech/mcp-server-salesforce": "^1.0.0",
+    "express": "^4.18.2"
+  }
+}
