@@ -1,6 +1,5 @@
 const express = require('express');
 const { spawn } = require('child_process');
-const fetch = require('node-fetch');  // si no lo tenías ya
 
 const app = express();
 app.use(express.json());
