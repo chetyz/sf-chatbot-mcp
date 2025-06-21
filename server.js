@@ -1,7 +1,5 @@
 const express = require('express');
 const { spawn } = require('child_process');
-const { Client } = require('@modelcontextprotocol/sdk');
-const { StdioClientTransport } = require('@modelcontextprotocol/sdk');
 
 const app = express();
 app.use(express.json());
@@ -12,11 +10,49 @@ const PORT = process.env.PORT || 3000;
 let mcpClient = null;
 let mcpTools = [];
 let mcpProcess = null;
+let Client, StdioClientTransport;
+
+// Cargar MCP SDK dinámicamente
+async function loadMCPSDK() {
+  try {
+    // Intentar cargar el SDK de diferentes formas
+    try {
+      const sdk = await import('@modelcontextprotocol/sdk');
+      Client = sdk.Client;
+      StdioClientTransport = sdk.StdioClientTransport;
+      console.log('✅ MCP SDK cargado correctamente (ESM)');
+    } catch (esmError) {
+      console.log('⚠️ Error cargando como ESM, intentando otras rutas...');
+      
+      // Intentar rutas alternativas
+      try {
+        const sdkPath = require.resolve('@modelcontextprotocol/sdk');
+        console.log('📁 SDK path:', sdkPath);
+        
+        // Cargar el cliente directamente
+        Client = require('@modelcontextprotocol/sdk/dist/client/index.js').Client;
+        StdioClientTransport = require('@modelcontextprotocol/sdk/dist/client/stdio.js').StdioClientTransport;
+        console.log('✅ MCP SDK cargado desde dist');
+      } catch (distError) {
+        console.error('❌ Error cargando desde dist:', distError.message);
+        throw new Error('No se pudo cargar el MCP SDK');
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error fatal cargando MCP SDK:', error);
+    throw error;
+  }
+}
 
 // Inicializar MCP Client completo
 async function initMCPClient() {
   try {
     console.log('🔧 Iniciando MCP Client...');
+    
+    // Asegurarse de que el SDK está cargado
+    if (!Client || !StdioClientTransport) {
+      await loadMCPSDK();
+    }
     
     // Spawn del MCP server
     mcpProcess = spawn('npx', ['-y', '@tsmztech/mcp-server-salesforce'], {
@@ -29,6 +65,15 @@ async function initMCPClient() {
         SALESFORCE_INSTANCE_URL: process.env.SALESFORCE_INSTANCE_URL || "https://login.salesforce.com"
       },
       stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    // Manejar errores del proceso
+    mcpProcess.on('error', (error) => {
+      console.error('❌ Error en proceso MCP:', error);
+    });
+
+    mcpProcess.stderr.on('data', (data) => {
+      console.error('⚠️ MCP Server stderr:', data.toString());
     });
 
     // Crear transport stdio
@@ -74,7 +119,9 @@ app.get('/', (req, res) => {
     claude_api: ANTHROPIC_API_KEY ? 'configured' : 'missing',
     mcp_client: mcpClient ? 'connected' : 'disconnected',
     mcp_tools: mcpTools.length,
-    available_tools: mcpTools.map(t => t.name)
+    available_tools: mcpTools.map(t => t.name),
+    node_version: process.version,
+    platform: process.platform
   });
 });
 
@@ -165,7 +212,8 @@ Responde en español de forma directa con información específica.`
     });
 
     if (!response.ok) {
-      throw new Error(`Claude API error: ${response.status}`);
+      const errorData = await response.text();
+      throw new Error(`Claude API error: ${response.status} - ${errorData}`);
     }
 
     let data = await response.json();
@@ -235,7 +283,8 @@ Responde en español de forma directa con información específica.`
       });
 
       if (!response.ok) {
-        throw new Error(`Claude API error: ${response.status}`);
+        const errorData = await response.text();
+        throw new Error(`Claude API error: ${response.status} - ${errorData}`);
       }
 
       data = await response.json();
@@ -278,7 +327,15 @@ app.listen(PORT, async () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🔑 Claude API: ${ANTHROPIC_API_KEY ? 'Configurado' : 'Faltante'}`);
   console.log(`⚡ Modo: MCP PROTOCOL COMPLETO`);
+  console.log(`📦 Node version: ${process.version}`);
   
-  // Inicializar MCP Client
-  await initMCPClient();
+  // Cargar SDK primero
+  try {
+    await loadMCPSDK();
+    // Inicializar MCP Client
+    await initMCPClient();
+  } catch (error) {
+    console.error('❌ Error durante inicialización:', error);
+    console.log('⚠️ El servidor está funcionando pero MCP no está disponible');
+  }
 });
