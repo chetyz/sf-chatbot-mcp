@@ -13,11 +13,7 @@ let mcpTools = [];
 let requestId = 0;
 const pendingRequests = new Map();
 
-// Cache simple para respuestas frecuentes (5 minutos)
-const responseCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
-
-// Función para enviar mensajes JSON-RPC al servidor MCP (optimizada)
+// Función para enviar mensajes JSON-RPC al servidor MCP
 function sendMCPMessage(method, params = {}) {
   return new Promise((resolve, reject) => {
     const id = ++requestId;
@@ -36,20 +32,20 @@ function sendMCPMessage(method, params = {}) {
       reject(new Error('MCP process not available'));
     }
     
-    // Timeout reducido a 25 segundos
+    // Timeout de 30 segundos
     setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id);
         reject(new Error('MCP request timeout'));
       }
-    }, 25000);
+    }, 30000);
   });
 }
 
 // Inicializar conexión con MCP Server
 async function initMCPServer() {
   try {
-    console.log('🔧 Iniciando MCP Server (Modo Optimizado)...');
+    console.log('🔧 Iniciando MCP Server...');
     
     mcpProcess = spawn('npx', ['-y', '@tsmztech/mcp-server-salesforce'], {
       env: {
@@ -92,19 +88,18 @@ async function initMCPServer() {
           }
         }
       } catch (e) {
-        // Ignorar logs no-JSON para mejor performance
+        // Ignorar logs no-JSON
       }
     });
 
     mcpProcess.stderr.on('data', (data) => {
-      // Solo log de errores críticos
       const error = data.toString();
       if (error.includes('ERROR') || error.includes('FATAL')) {
         console.error('⚠️ MCP stderr:', error);
       }
     });
 
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await new Promise(resolve => setTimeout(resolve, 2000));
 
     await sendMCPMessage('initialize', {
       protocolVersion: "0.1.0",
@@ -114,7 +109,7 @@ async function initMCPServer() {
         version: "1.0.0"
       }
     });
-    console.log('✅ MCP inicializado (modo rápido)');
+    console.log('✅ MCP inicializado');
 
     const toolsResponse = await sendMCPMessage('tools/list');
     mcpTools = toolsResponse.tools || [];
@@ -127,51 +122,20 @@ async function initMCPServer() {
   }
 }
 
-// Health check optimizado
+// Health check
 app.get('/', (req, res) => {
   res.json({ 
-    status: 'SF Chatbot - OPTIMIZED FIXED VERSION',
+    status: 'SF Chatbot - BACK TO FULL CLAUDE INTELLIGENCE',
     timestamp: new Date().toISOString(),
     claude_api: ANTHROPIC_API_KEY ? 'configured' : 'missing',
     mcp_server: mcpProcess ? 'running' : 'stopped',
     mcp_tools: mcpTools.length,
-    cache_size: responseCache.size,
-    mode: 'FAST_AND_RELIABLE',
-    model: 'claude-3-haiku-20240307',
-    cost_optimization: 'ENABLED'
+    mode: 'FULL_CLAUDE_POWER',
+    model: 'claude-3-5-sonnet-20241022'
   });
 });
 
-// Función para detectar tipo de consulta y optimizar approach
-function analyzeQuery(question) {
-  const lowerQ = question.toLowerCase();
-  
-  // Consultas simples que pueden usar handlers optimizados
-  if (lowerQ.includes('cuantos') && lowerQ.includes('lead')) {
-    return { type: 'count_leads', cache_key: 'leads_count' };
-  }
-  
-  if ((lowerQ.includes('cuantos') || lowerQ.includes('cuantas')) && (lowerQ.includes('vendedor') || lowerQ.includes('usuario'))) {
-    return { type: 'count_users', cache_key: 'users_count' };
-  }
-  
-  if (lowerQ.includes('oportunidad') && (lowerQ.includes('monto') || lowerQ.includes('alto') || lowerQ.includes('grande') || lowerQ.includes('mayor'))) {
-    return { type: 'top_opportunity', cache_key: 'top_opp' };
-  }
-  
-  if ((lowerQ.includes('cuantas') || lowerQ.includes('cuantos')) && lowerQ.includes('oportunidad')) {
-    return { type: 'count_opportunities', cache_key: 'opp_count' };
-  }
-  
-  if ((lowerQ.includes('mejor') || lowerQ.includes('top')) && lowerQ.includes('vendedor')) {
-    return { type: 'top_salesperson', cache_key: 'top_sales' };
-  }
-  
-  // Consulta compleja - usar Claude completo
-  return { type: 'complex', cache_key: null };
-}
-
-// Endpoint principal optimizado
+// Endpoint principal - VUELTA A CLAUDE COMPLETO
 app.post('/chat', async (req, res) => {
   try {
     const { question } = req.body;
@@ -199,68 +163,14 @@ app.post('/chat', async (req, res) => {
       }
     }
 
-    // Analizar tipo de consulta para optimizar
-    const queryAnalysis = analyzeQuery(question);
-    
-    // Verificar cache primero
-    if (queryAnalysis.cache_key) {
-      const cached = responseCache.get(queryAnalysis.cache_key);
-      if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
-        console.log('⚡ Respuesta desde cache');
-        return res.json({
-          response: cached.response,
-          mode: 'cached',
-          timestamp: new Date().toISOString(),
-          cost: '$0.00'
-        });
-      }
-    }
-    
-    let claudeResponse;
-    let cost = 0;
-    
-    // Routing optimizado por tipo de consulta
-    try {
-      if (queryAnalysis.type === 'count_leads') {
-        claudeResponse = await handleLeadsCount();
-        cost = 0.005; // Muy barato
-      } else if (queryAnalysis.type === 'count_users') {
-        claudeResponse = await handleUsersCount();
-        cost = 0.005;
-      } else if (queryAnalysis.type === 'top_opportunity') {
-        claudeResponse = await handleTopOpportunity();
-        cost = 0.005;
-      } else if (queryAnalysis.type === 'count_opportunities') {
-        claudeResponse = await handleOpportunitiesCount();
-        cost = 0.005;
-      } else if (queryAnalysis.type === 'top_salesperson') {
-        claudeResponse = await handleTopSalesperson();
-        cost = 0.010;
-      } else {
-        // Solo para consultas complejas usar Claude completo
-        claudeResponse = await callClaudeWithMCP(question);
-        cost = 0.06; // Más caro pero solo para casos complejos
-      }
-    } catch (handlerError) {
-      console.log(`⚠️ Handler failed, fallback to Claude: ${handlerError.message}`);
-      claudeResponse = await callClaudeWithMCP(question);
-      cost = 0.06;
-    }
-    
-    // Guardar en cache
-    if (queryAnalysis.cache_key && claudeResponse && !claudeResponse.includes('Error')) {
-      responseCache.set(queryAnalysis.cache_key, {
-        response: claudeResponse,
-        timestamp: Date.now()
-      });
-    }
+    // USAR CLAUDE COMPLETO SIEMPRE - Los handlers optimizados fallan
+    const claudeResponse = await callClaudeWithFullPower(question);
     
     res.json({ 
       response: claudeResponse,
-      mode: 'optimized_fixed',
-      query_type: queryAnalysis.type,
-      estimated_cost: `$${cost.toFixed(3)}`,
-      timestamp: new Date().toISOString()
+      mode: 'full_claude_intelligence',
+      timestamp: new Date().toISOString(),
+      cost: '$0.08'
     });
     
   } catch (error) {
@@ -272,187 +182,10 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// Handlers optimizados CORREGIDOS
-async function handleLeadsCount() {
+// Claude con máxima inteligencia - SIN handlers que fallan
+async function callClaudeWithFullPower(question) {
   try {
-    console.log('🔍 Ejecutando handleLeadsCount...');
-    const result = await sendMCPMessage('tools/call', {
-      name: 'salesforce:salesforce_aggregate_query',
-      arguments: {
-        objectName: 'Lead',
-        selectFields: ['Status', 'COUNT(Id) Total'],
-        groupByFields: ['Status']
-      }
-    });
-    
-    console.log('📊 Resultado leads:', JSON.stringify(result, null, 2));
-    
-    if (!result || !result.content) {
-      throw new Error('No se recibieron datos de leads');
-    }
-    
-    const records = result.content;
-    const total = records.reduce((sum, record) => sum + (record.Total || 0), 0);
-    
-    let response = `📊 **Resumen de Leads**\n\nTotal: **${total} leads**\n\n**Por Estado:**\n`;
-    records.forEach(record => {
-      response += `• ${record.Status}: ${record.Total} leads\n`;
-    });
-    
-    const openNotContacted = records.find(r => r.Status === 'Open - Not Contacted')?.Total || 0;
-    response += `\n💡 **Insight rápido:** ${openNotContacted} leads esperan tu contacto.`;
-    
-    return response;
-  } catch (error) {
-    console.error('❌ Error en handleLeadsCount:', error);
-    throw error;
-  }
-}
-
-async function handleUsersCount() {
-  try {
-    console.log('🔍 Ejecutando handleUsersCount...');
-    const result = await sendMCPMessage('tools/call', {
-      name: 'salesforce:salesforce_query_records',
-      arguments: {
-        objectName: 'User',
-        fields: ['Id', 'Name', 'Profile.Name', 'IsActive'],
-        whereClause: 'IsActive = true'
-      }
-    });
-    
-    console.log('👥 Resultado users:', JSON.stringify(result, null, 2));
-    
-    if (!result || !result.content) {
-      throw new Error('No se recibieron datos de usuarios');
-    }
-    
-    const users = result.content;
-    const salesUsers = users.filter(u => 
-      u['Profile.Name'] && (
-        u['Profile.Name'].includes('Sales') || 
-        u['Profile.Name'].includes('Account') ||
-        u['Profile.Name'].includes('Standard User')
-      )
-    );
-    
-    return `👥 **Usuarios Activos**\n\nTotal usuarios activos: **${users.length}**\nUsuarios de ventas: **${salesUsers.length}**\n\n💼 Tienes un equipo sólido para gestionar tu pipeline.`;
-    
-  } catch (error) {
-    console.error('❌ Error en handleUsersCount:', error);
-    throw error;
-  }
-}
-
-async function handleTopOpportunity() {
-  try {
-    console.log('🔍 Ejecutando handleTopOpportunity...');
-    const result = await sendMCPMessage('tools/call', {
-      name: 'salesforce:salesforce_query_records',
-      arguments: {
-        objectName: 'Opportunity',
-        fields: ['Name', 'Amount', 'StageName', 'Account.Name', 'CloseDate'],
-        orderBy: 'Amount DESC NULLS LAST',
-        limit: 1
-      }
-    });
-    
-    console.log('💰 Resultado opportunity:', JSON.stringify(result, null, 2));
-    
-    if (!result || !result.content || result.content.length === 0) {
-      return "No se encontraron oportunidades en tu sistema.";
-    }
-    
-    const opportunity = result.content[0];
-    const amount = opportunity.Amount ? `$${opportunity.Amount.toLocaleString()}` : 'Monto no definido';
-    
-    return `🏆 **Oportunidad más grande**\n\n**${opportunity.Name || 'Sin nombre'}**\n• Monto: ${amount}\n• Cuenta: ${opportunity['Account.Name'] || 'No especificada'}\n• Estado: ${opportunity.StageName || 'Sin estado'}\n• Cierre: ${opportunity.CloseDate || 'No definido'}\n\n🎯 Esta es tu oportunidad estrella. ¡Manténla en el radar!`;
-    
-  } catch (error) {
-    console.error('❌ Error en handleTopOpportunity:', error);
-    throw error;
-  }
-}
-
-async function handleOpportunitiesCount() {
-  try {
-    console.log('🔍 Ejecutando handleOpportunitiesCount...');
-    const result = await sendMCPMessage('tools/call', {
-      name: 'salesforce:salesforce_aggregate_query',
-      arguments: {
-        objectName: 'Opportunity',
-        selectFields: ['StageName', 'COUNT(Id) Total', 'SUM(Amount) TotalAmount'],
-        groupByFields: ['StageName']
-      }
-    });
-    
-    console.log('📈 Resultado opportunities:', JSON.stringify(result, null, 2));
-    
-    if (!result || !result.content) {
-      throw new Error('No se recibieron datos de oportunidades');
-    }
-    
-    const records = result.content;
-    const total = records.reduce((sum, record) => sum + (record.Total || 0), 0);
-    const totalAmount = records.reduce((sum, record) => sum + (record.TotalAmount || 0), 0);
-    
-    let response = `💰 **Pipeline de Oportunidades**\n\nTotal: **${total} oportunidades**\nValor total: **$${totalAmount.toLocaleString()}**\n\n**Por Etapa:**\n`;
-    
-    records.forEach(record => {
-      const amount = record.TotalAmount ? `($${record.TotalAmount.toLocaleString()})` : '';
-      response += `• ${record.StageName}: ${record.Total} ${amount}\n`;
-    });
-    
-    return response;
-    
-  } catch (error) {
-    console.error('❌ Error en handleOpportunitiesCount:', error);
-    throw error;
-  }
-}
-
-async function handleTopSalesperson() {
-  try {
-    console.log('🔍 Ejecutando handleTopSalesperson...');
-    const result = await sendMCPMessage('tools/call', {
-      name: 'salesforce:salesforce_aggregate_query',
-      arguments: {
-        objectName: 'Opportunity',
-        selectFields: ['Owner.Name', 'COUNT(Id) TotalOpps', 'SUM(Amount) TotalRevenue'],
-        groupByFields: ['Owner.Name'],
-        orderBy: 'SUM(Amount) DESC NULLS LAST',
-        limit: 5
-      }
-    });
-    
-    console.log('🏆 Resultado salesperson:', JSON.stringify(result, null, 2));
-    
-    if (!result || !result.content || result.content.length === 0) {
-      return "No se encontraron datos de vendedores en tu sistema.";
-    }
-    
-    const topSeller = result.content[0];
-    const topRevenue = topSeller.TotalRevenue ? `$${topSeller.TotalRevenue.toLocaleString()}` : 'Ingresos no definidos';
-    
-    let response = `🏆 **Mejor Vendedor**\n\n**${topSeller['Owner.Name'] || 'Sin nombre'}**\n• Ingresos totales: ${topRevenue}\n• Oportunidades: ${topSeller.TotalOpps || 0}\n\n**Top 5 Vendedores:**\n`;
-    
-    result.content.forEach((seller, index) => {
-      const revenue = seller.TotalRevenue ? `$${seller.TotalRevenue.toLocaleString()}` : '$0';
-      response += `${index + 1}. ${seller['Owner.Name']} - ${revenue} (${seller.TotalOpps} opps)\n`;
-    });
-    
-    return response;
-    
-  } catch (error) {
-    console.error('❌ Error en handleTopSalesperson:', error);
-    throw error;
-  }
-}
-
-// Claude optimizado solo para casos complejos
-async function callClaudeWithMCP(question) {
-  try {
-    console.log('🤖 Claude optimizado para consulta compleja...');
+    console.log('🤖 Claude con máxima inteligencia...');
     
     const claudeTools = mcpTools.map(tool => ({
       name: tool.name,
@@ -460,11 +193,33 @@ async function callClaudeWithMCP(question) {
       input_schema: tool.inputSchema
     }));
 
+    // Sistema de prompts mejorado
+    const systemPrompt = `Eres un asistente experto de Salesforce con acceso completo a herramientas MCP. 
+
+INSTRUCCIONES CRÍTICAS:
+1. SIEMPRE usa las herramientas MCP para obtener datos reales de Salesforce
+2. Da respuestas completas, detalladas y útiles como Claude Sonnet
+3. Analiza los datos que obtienes y proporciona insights valiosos
+4. Incluye números específicos, nombres, fechas y detalles relevantes
+5. Si encuentras datos interesantes adicionales, compártelos también
+6. Responde en español de forma profesional pero amigable
+7. Si hay múltiples registros relevantes, menciona los más importantes
+8. Para consultas simples como saludos, responde naturalmente SIN usar herramientas
+
+FORMATO DE RESPUESTA:
+- Respuesta directa a la pregunta
+- Datos específicos y números exactos
+- Contexto adicional relevante cuando sea útil
+- Insights o recomendaciones si corresponde
+
+Eres tan inteligente como Claude Sonnet y debes dar respuestas de la misma calidad.`;
+
     let messages = [{
       role: 'user',
-      content: `Como asistente experto de Salesforce, responde esta consulta de forma directa y útil: "${question}"\n\nUsa las herramientas MCP para obtener datos reales de Salesforce. Proporciona respuestas completas con números específicos y análisis útil.`
+      content: question
     }];
 
+    // Primera llamada a Claude con modelo potente
     let response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -473,35 +228,50 @@ async function callClaudeWithMCP(question) {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-haiku-20240307',
-        max_tokens: 2000,
-        temperature: 0.1,
+        model: 'claude-3-5-sonnet-20241022', // Modelo más potente
+        max_tokens: 3000, // Suficientes tokens para respuestas completas
+        temperature: 0.3,
+        system: systemPrompt,
         messages: messages,
         tools: claudeTools
       })
     });
 
     if (!response.ok) {
+      const errorData = await response.text();
+      console.error('Claude API Error:', errorData);
       throw new Error(`Claude API error: ${response.status}`);
     }
 
     let data = await response.json();
+    console.log('📡 Respuesta inicial de Claude recibida');
     
-    // Solo una iteración para tool calls
-    if (data.content && data.content.some(item => item.type === 'tool_use')) {
-      console.log('🔧 Ejecutando herramientas (1 iteración)...');
+    // Procesar tool calls hasta 3 iteraciones máximo
+    let iterationCount = 0;
+    const maxIterations = 3;
+    
+    while (data.content && data.content.some(item => item.type === 'tool_use') && iterationCount < maxIterations) {
+      console.log(`🔧 Claude ejecutando herramientas (iteración ${iterationCount + 1})`);
       
-      messages.push({ role: 'assistant', content: data.content });
+      messages.push({
+        role: 'assistant',
+        content: data.content
+      });
 
       const toolResults = [];
+      
       for (const item of data.content) {
         if (item.type === 'tool_use') {
+          console.log(`⚡ Ejecutando: ${item.name}`);
+          console.log(`📝 Parámetros:`, JSON.stringify(item.input, null, 2));
+          
           try {
-            console.log(`⚡ Ejecutando: ${item.name}`);
             const result = await sendMCPMessage('tools/call', {
               name: item.name,
               arguments: item.input
             });
+            
+            console.log(`✅ Resultado de ${item.name}:`, JSON.stringify(result, null, 2));
             
             toolResults.push({
               type: 'tool_result',
@@ -509,20 +279,27 @@ async function callClaudeWithMCP(question) {
               content: JSON.stringify(result.content || result, null, 2)
             });
           } catch (toolError) {
-            console.error(`❌ Error en herramienta ${item.name}:`, toolError);
+            console.error(`❌ Error ejecutando ${item.name}:`, toolError.message);
+            
             toolResults.push({
               type: 'tool_result',
               tool_use_id: item.id,
-              content: JSON.stringify({ error: toolError.message }),
+              content: JSON.stringify({ 
+                error: toolError.message,
+                message: "Error ejecutando herramienta de Salesforce. Intenta reformular tu pregunta."
+              }),
               is_error: true
             });
           }
         }
       }
 
-      messages.push({ role: 'user', content: toolResults });
+      messages.push({
+        role: 'user',
+        content: toolResults
+      });
 
-      // Segunda y FINAL llamada
+      // Nueva llamada a Claude con resultados
       response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -531,51 +308,50 @@ async function callClaudeWithMCP(question) {
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: 'claude-3-haiku-20240307',
-          max_tokens: 2000,
-          temperature: 0.1,
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 3000,
+          temperature: 0.3,
+          system: systemPrompt,
           messages: messages,
           tools: claudeTools
         })
       });
 
       if (!response.ok) {
+        const errorData = await response.text();
         throw new Error(`Claude API error: ${response.status}`);
       }
 
       data = await response.json();
+      iterationCount++;
+      console.log(`📡 Respuesta de Claude (iteración ${iterationCount}) recibida`);
     }
     
+    // Extraer respuesta final
     const finalText = data.content
       .filter(item => item.type === 'text')
       .map(item => item.text)
       .join(' ')
       .trim();
     
-    return finalText || 'Error procesando respuesta.';
+    if (!finalText) {
+      return 'Lo siento, no pude procesar tu consulta correctamente. ¿Podrías reformular tu pregunta de manera más específica?';
+    }
+    
+    console.log('✅ Respuesta final generada correctamente');
+    return finalText;
     
   } catch (error) {
-    console.error('❌ Error en Claude optimizado:', error);
-    return `❌ Error procesando consulta: ${error.message}`;
+    console.error('❌ Error en Claude:', error);
+    return `❌ Error procesando tu consulta: ${error.message}. Por favor intenta de nuevo.`;
   }
 }
-
-// Limpiar cache periódicamente
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of responseCache.entries()) {
-    if (now - value.timestamp > CACHE_TTL) {
-      responseCache.delete(key);
-    }
-  }
-}, CACHE_TTL);
 
 app.get('/keepalive', (req, res) => {
   res.json({ 
     status: 'alive', 
     timestamp: new Date().toISOString(),
-    mode: 'OPTIMIZED_FIXED_VERSION',
-    cache_size: responseCache.size
+    mode: 'FULL_CLAUDE_INTELLIGENCE'
   });
 });
 
@@ -588,19 +364,17 @@ process.on('SIGTERM', async () => {
 });
 
 app.listen(PORT, async () => {
-  console.log(`🚀 Server OPTIMIZADO Y CORREGIDO running on port ${PORT}`);
+  console.log(`🚀 Server CLAUDE FULL POWER running on port ${PORT}`);
   console.log(`🔑 Claude API: ${ANTHROPIC_API_KEY ? 'Configurado ✅' : 'Faltante ❌'}`);
-  console.log(`⚡ Modo: SPEED & COST OPTIMIZED + FIXED`);
-  console.log(`🧠 Modelo: claude-3-haiku (FAST & CHEAP)`);
-  console.log(`💰 Costo estimado: $0.005-$0.06 por consulta`);
-  console.log(`⚡ Cache: ENABLED para consultas frecuentes`);
-  console.log(`🔧 Handlers: CORREGIDOS con mejor manejo de errores`);
+  console.log(`⚡ Modo: CLAUDE FULL INTELLIGENCE - NO MÁS HANDLERS FALLIDOS`);
+  console.log(`🧠 Modelo: claude-3-5-sonnet-20241022`);
+  console.log(`💰 Costo: $0.08 por consulta pero RESPUESTAS PERFECTAS`);
   console.log(`📦 Node version: ${process.version}`);
   
   const connected = await initMCPServer();
   if (!connected) {
     console.log('⚠️ MCP no disponible - verificar credenciales SF');
   } else {
-    console.log('🎉 ¡Sistema optimizado y corregido listo!');
+    console.log('🎉 ¡Claude con máxima inteligencia listo!');
   }
 });
