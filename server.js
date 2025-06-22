@@ -32,13 +32,13 @@ function sendMCPMessage(method, params = {}) {
       reject(new Error('MCP process not available'));
     }
     
-    // Timeout después de 30 segundos
+    // Timeout después de 60 segundos
     setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id);
         reject(new Error('MCP request timeout'));
       }
-    }, 30000);
+    }, 60000);
   });
 }
 
@@ -134,14 +134,15 @@ async function initMCPServer() {
 // Health check
 app.get('/', (req, res) => {
   res.json({ 
-    status: 'SF Chatbot MCP Server - DIRECT JSON-RPC',
+    status: 'SF Chatbot MCP Server - CLAUDE FULL POWER MODE',
     timestamp: new Date().toISOString(),
     claude_api: ANTHROPIC_API_KEY ? 'configured' : 'missing',
     mcp_server: mcpProcess ? 'running' : 'stopped',
     mcp_tools: mcpTools.length,
     available_tools: mcpTools.map(t => t.name),
     node_version: process.version,
-    platform: process.platform
+    platform: process.platform,
+    mode: 'FULL_INTELLIGENCE'
   });
 });
 
@@ -158,7 +159,7 @@ app.post('/chat', async (req, res) => {
 
     if (!ANTHROPIC_API_KEY) {
       return res.json({ 
-        response: `[MODO BÁSICO] Pregunta: ${question}. Configura ANTHROPIC_API_KEY.`,
+        response: `[MODO BÁSICO] Pregunta: ${question}. Configura ANTHROPIC_API_KEY para acceso completo a Claude.`,
         mode: 'basic'
       });
     }
@@ -167,7 +168,7 @@ app.post('/chat', async (req, res) => {
       const connected = await initMCPServer();
       if (!connected) {
         return res.json({
-          response: "Error: No puedo conectar con MCP. Verifica las credenciales de Salesforce.",
+          response: "❌ Error: No puedo conectar con Salesforce. Verifica las credenciales en las variables de entorno.",
           mode: 'error'
         });
       }
@@ -178,7 +179,7 @@ app.post('/chat', async (req, res) => {
     
     res.json({ 
       response: claudeResponse,
-      mode: 'mcp_json_rpc',
+      mode: 'full_claude_intelligence',
       timestamp: new Date().toISOString()
     });
     
@@ -186,15 +187,15 @@ app.post('/chat', async (req, res) => {
     console.error('❌ Error en /chat:', error);
     res.status(500).json({ 
       error: `Error del servidor: ${error.message}`,
-      fallback: `Pregunta recibida: ${req.body.question}.`
+      fallback: `⚠️ Hubo un problema procesando tu pregunta: "${req.body.question}". Intenta de nuevo.`
     });
   }
 });
 
-// Función para llamar a Claude con MCP
+// Función mejorada para llamar a Claude con MCP
 async function callClaudeWithMCP(question) {
   try {
-    console.log('🤖 Iniciando conversación con Claude + MCP...');
+    console.log('🤖 Iniciando conversación con Claude (Modo Inteligencia Completa)...');
     
     // Convertir herramientas MCP al formato de Claude API
     const claudeTools = mcpTools.map(tool => ({
@@ -205,17 +206,36 @@ async function callClaudeWithMCP(question) {
 
     console.log(`🛠️ Enviando ${claudeTools.length} herramientas a Claude`);
 
-    // Primera llamada a Claude
+    // Mensaje del sistema mejorado para comportarse como Claude completo
+    const systemMessage = `Eres un asistente experto de Salesforce con acceso completo a herramientas MCP. 
+
+INSTRUCCIONES CRÍTICAS:
+1. Usa SIEMPRE las herramientas disponibles para obtener datos reales de Salesforce
+2. Da respuestas completas, detalladas y útiles como lo haría Claude
+3. Analiza los datos que obtienes y proporciona insights valiosos
+4. Incluye números específicos, nombres, fechas y detalles relevantes
+5. Si encuentras datos interesantes adicionales, compártelos también
+6. Responde en español de forma profesional pero amigable
+7. Si hay múltiples registros relevantes, menciona los más importantes
+8. Nunca digas "no tengo información" sin antes usar las herramientas
+
+FORMATO DE RESPUESTA:
+- Respuesta directa a la pregunta
+- Datos específicos y números exactos
+- Contexto adicional relevante cuando sea útil
+- Insights o recomendaciones si corresponde
+
+Recuerda: Eres tan inteligente como Claude y debes dar respuestas de la misma calidad.`;
+
+    // Mensajes iniciales
     let messages = [
       {
         role: 'user',
-        content: `Soy un asistente de Salesforce. Responde esta pregunta usando las herramientas disponibles: "${question}"
-
-Usa las herramientas para obtener datos reales de Salesforce.
-Responde en español de forma directa con información específica.`
+        content: question
       }
     ];
 
+    // Primera llamada a Claude con modelo más potente
     let response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -224,8 +244,10 @@ Responde en español de forma directa con información específica.`
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-haiku-20240307',
-        max_tokens: 1500,
+        model: 'claude-3-5-sonnet-20241022', // Modelo más potente
+        max_tokens: 4000, // Más tokens para respuestas completas
+        temperature: 0.3, // Más preciso pero manteniendo naturalidad
+        system: systemMessage,
         messages: messages,
         tools: claudeTools
       })
@@ -233,15 +255,19 @@ Responde en español de forma directa con información específica.`
 
     if (!response.ok) {
       const errorData = await response.text();
+      console.error('Claude API Error:', errorData);
       throw new Error(`Claude API error: ${response.status} - ${errorData}`);
     }
 
     let data = await response.json();
     console.log('📡 Respuesta inicial de Claude recibida');
     
-    // Procesar tool calls si existen
-    while (data.content && data.content.some(item => item.type === 'tool_use')) {
-      console.log('🔧 Claude quiere usar herramientas');
+    // Procesar tool calls iterativamente (como lo hace Claude real)
+    let iterationCount = 0;
+    const maxIterations = 5; // Prevenir loops infinitos
+    
+    while (data.content && data.content.some(item => item.type === 'tool_use') && iterationCount < maxIterations) {
+      console.log(`🔧 Claude ejecutando herramientas (iteración ${iterationCount + 1})`);
       
       // Agregar respuesta de Claude a los mensajes
       messages.push({
@@ -254,7 +280,8 @@ Responde en español de forma directa con información específica.`
       
       for (const item of data.content) {
         if (item.type === 'tool_use') {
-          console.log(`⚡ Ejecutando: ${item.name} con:`, item.input);
+          console.log(`⚡ Ejecutando: ${item.name}`);
+          console.log(`📝 Parámetros:`, JSON.stringify(item.input, null, 2));
           
           try {
             // Llamar a la herramienta vía JSON-RPC
@@ -263,20 +290,23 @@ Responde en español de forma directa con información específica.`
               arguments: item.input
             });
             
-            console.log(`✅ Resultado de ${item.name}:`, result);
+            console.log(`✅ Resultado de ${item.name} obtenido correctamente`);
             
             toolResults.push({
               type: 'tool_result',
               tool_use_id: item.id,
-              content: JSON.stringify(result.content || result)
+              content: JSON.stringify(result.content || result, null, 2)
             });
           } catch (toolError) {
-            console.error(`❌ Error ejecutando ${item.name}:`, toolError);
+            console.error(`❌ Error ejecutando ${item.name}:`, toolError.message);
             
             toolResults.push({
               type: 'tool_result',
               tool_use_id: item.id,
-              content: JSON.stringify({ error: toolError.message }),
+              content: JSON.stringify({ 
+                error: toolError.message,
+                message: "Error ejecutando herramienta. Puede que los parámetros no sean correctos o que haya un problema de conectividad con Salesforce."
+              }),
               is_error: true
             });
           }
@@ -298,8 +328,10 @@ Responde en español de forma directa con información específica.`
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: 'claude-3-haiku-20240307',
-          max_tokens: 1500,
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 4000,
+          temperature: 0.3,
+          system: systemMessage,
           messages: messages,
           tools: claudeTools
         })
@@ -311,26 +343,37 @@ Responde en español de forma directa con información específica.`
       }
 
       data = await response.json();
-      console.log('📡 Nueva respuesta de Claude recibida');
+      iterationCount++;
+      console.log(`📡 Respuesta de Claude (iteración ${iterationCount}) recibida`);
     }
     
     // Extraer respuesta final
     const finalText = data.content
       .filter(item => item.type === 'text')
       .map(item => item.text)
-      .join(' ');
+      .join(' ')
+      .trim();
     
-    return finalText || 'Error procesando respuesta final';
+    if (!finalText) {
+      return 'Lo siento, no pude procesar tu consulta correctamente. ¿Podrías reformular tu pregunta?';
+    }
+    
+    console.log('✅ Respuesta final generada correctamente');
+    return finalText;
     
   } catch (error) {
     console.error('❌ Error en Claude + MCP:', error);
-    throw error;
+    return `❌ Error procesando tu consulta: ${error.message}. Por favor intenta de nuevo o verifica la conectividad con Salesforce.`;
   }
 }
 
 // Keepalive
 app.get('/keepalive', (req, res) => {
-  res.json({ status: 'alive', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'alive', 
+    timestamp: new Date().toISOString(),
+    mode: 'FULL_CLAUDE_INTELLIGENCE'
+  });
 });
 
 // Cleanup al cerrar
@@ -345,13 +388,18 @@ process.on('SIGTERM', async () => {
 // Inicializar servidor
 app.listen(PORT, async () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🔑 Claude API: ${ANTHROPIC_API_KEY ? 'Configurado' : 'Faltante'}`);
-  console.log(`⚡ Modo: MCP JSON-RPC DIRECTO`);
+  console.log(`🔑 Claude API: ${ANTHROPIC_API_KEY ? 'Configurado ✅' : 'Faltante ❌'}`);
+  console.log(`⚡ Modo: CLAUDE FULL INTELLIGENCE`);
+  console.log(`🧠 Modelo: claude-3-5-sonnet-20241022`);
   console.log(`📦 Node version: ${process.version}`);
+  console.log(`🌟 ¡Tu chatbot ahora tiene la inteligencia completa de Claude!`);
   
   // Inicializar MCP Server
   const connected = await initMCPServer();
   if (!connected) {
     console.log('⚠️ El servidor está funcionando pero MCP no está disponible');
+    console.log('📋 Verifica las variables de entorno de Salesforce');
+  } else {
+    console.log('🎉 ¡Todo listo! Tu chatbot está funcionando con máxima inteligencia');
   }
 });
