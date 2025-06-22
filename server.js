@@ -13,6 +13,10 @@ let mcpTools = [];
 let requestId = 0;
 const pendingRequests = new Map();
 
+// Cache para respuestas frecuentes (10 minutos)
+const responseCache = new Map();
+const CACHE_TTL = 10 * 60 * 1000;
+
 // Función para enviar mensajes JSON-RPC al servidor MCP
 function sendMCPMessage(method, params = {}) {
   return new Promise((resolve, reject) => {
@@ -32,13 +36,12 @@ function sendMCPMessage(method, params = {}) {
       reject(new Error('MCP process not available'));
     }
     
-    // Timeout de 30 segundos
     setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id);
         reject(new Error('MCP request timeout'));
       }
-    }, 30000);
+    }, 25000);
   });
 }
 
@@ -122,20 +125,39 @@ async function initMCPServer() {
   }
 }
 
+// Detectar consultas simples que no necesitan herramientas
+function isSimpleQuery(question) {
+  const lowerQ = question.toLowerCase();
+  
+  // Saludos y conversación básica
+  if (lowerQ.match(/^(hola|hi|hello|buenos días|buenas tardes|hey)$/)) {
+    return { simple: true, response: "¡Hola! Soy tu asistente de Salesforce. ¿En qué puedo ayudarte con tus datos de ventas?" };
+  }
+  
+  // Consultas sobre personas famosas (no están en SF)
+  if (lowerQ.includes('cristiano ronaldo') || lowerQ.includes('messi') || lowerQ.includes('famous') || 
+      lowerQ.includes('celebrity') || lowerQ.includes('actor') || lowerQ.includes('cantante')) {
+    return { simple: true, response: "Parece que preguntas sobre una persona famosa. Mi función es ayudarte con datos de tu Salesforce. ¿Tienes alguna consulta sobre leads, oportunidades, cuentas o contactos de tu organización?" };
+  }
+  
+  return { simple: false };
+}
+
 // Health check
 app.get('/', (req, res) => {
   res.json({ 
-    status: 'SF Chatbot - BACK TO FULL CLAUDE INTELLIGENCE',
+    status: 'SF Chatbot - BALANCED COST & INTELLIGENCE',
     timestamp: new Date().toISOString(),
     claude_api: ANTHROPIC_API_KEY ? 'configured' : 'missing',
     mcp_server: mcpProcess ? 'running' : 'stopped',
     mcp_tools: mcpTools.length,
-    mode: 'FULL_CLAUDE_POWER',
-    model: 'claude-3-5-sonnet-20241022'
+    cache_size: responseCache.size,
+    mode: 'COST_OPTIMIZED_CLAUDE',
+    model: 'claude-3-haiku-20240307 + cache'
   });
 });
 
-// Endpoint principal - VUELTA A CLAUDE COMPLETO
+// Endpoint principal con optimización de costos
 app.post('/chat', async (req, res) => {
   try {
     const { question } = req.body;
@@ -153,6 +175,31 @@ app.post('/chat', async (req, res) => {
       });
     }
 
+    // Verificar consultas simples primero
+    const simpleCheck = isSimpleQuery(question);
+    if (simpleCheck.simple) {
+      console.log('⚡ Respuesta simple sin herramientas');
+      return res.json({
+        response: simpleCheck.response,
+        mode: 'simple_response',
+        cost: '$0.000',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Verificar cache
+    const cacheKey = question.toLowerCase().trim();
+    const cached = responseCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+      console.log('💰 Respuesta desde cache');
+      return res.json({
+        response: cached.response,
+        mode: 'cached',
+        cost: '$0.000',
+        timestamp: new Date().toISOString()
+      });
+    }
+
     if (!mcpProcess) {
       const connected = await initMCPServer();
       if (!connected) {
@@ -163,14 +210,22 @@ app.post('/chat', async (req, res) => {
       }
     }
 
-    // USAR CLAUDE COMPLETO SIEMPRE - Los handlers optimizados fallan
-    const claudeResponse = await callClaudeWithFullPower(question);
+    // Usar modelo más barato pero con prompts optimizados
+    const claudeResponse = await callClaudeOptimized(question);
+    
+    // Guardar en cache si es exitoso
+    if (claudeResponse && !claudeResponse.includes('Error')) {
+      responseCache.set(cacheKey, {
+        response: claudeResponse,
+        timestamp: Date.now()
+      });
+    }
     
     res.json({ 
       response: claudeResponse,
-      mode: 'full_claude_intelligence',
-      timestamp: new Date().toISOString(),
-      cost: '$0.08'
+      mode: 'optimized_claude',
+      cost: '$0.015', // Costo estimado reducido
+      timestamp: new Date().toISOString()
     });
     
   } catch (error) {
@@ -182,10 +237,10 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// Claude con máxima inteligencia - SIN handlers que fallan
-async function callClaudeWithFullPower(question) {
+// Claude optimizado para costos
+async function callClaudeOptimized(question) {
   try {
-    console.log('🤖 Claude con máxima inteligencia...');
+    console.log('🤖 Claude optimizado para costo-calidad...');
     
     const claudeTools = mcpTools.map(tool => ({
       name: tool.name,
@@ -193,33 +248,24 @@ async function callClaudeWithFullPower(question) {
       input_schema: tool.inputSchema
     }));
 
-    // Sistema de prompts mejorado
-    const systemPrompt = `Eres un asistente experto de Salesforce con acceso completo a herramientas MCP. 
+    // Sistema de prompts más conciso pero efectivo
+    const systemPrompt = `Eres un asistente de Salesforce experto. 
 
-INSTRUCCIONES CRÍTICAS:
-1. SIEMPRE usa las herramientas MCP para obtener datos reales de Salesforce
-2. Da respuestas completas, detalladas y útiles como Claude Sonnet
-3. Analiza los datos que obtienes y proporciona insights valiosos
-4. Incluye números específicos, nombres, fechas y detalles relevantes
-5. Si encuentras datos interesantes adicionales, compártelos también
-6. Responde en español de forma profesional pero amigable
-7. Si hay múltiples registros relevantes, menciona los más importantes
-8. Para consultas simples como saludos, responde naturalmente SIN usar herramientas
+INSTRUCCIONES:
+1. Usa herramientas MCP para obtener datos reales de Salesforce
+2. Da respuestas directas, útiles y completas
+3. Incluye números específicos y detalles relevantes
+4. Responde en español de forma profesional
+5. Para consultas imposibles (datos futuros, personas famosas), explica brevemente por qué
 
-FORMATO DE RESPUESTA:
-- Respuesta directa a la pregunta
-- Datos específicos y números exactos
-- Contexto adicional relevante cuando sea útil
-- Insights o recomendaciones si corresponde
-
-Eres tan inteligente como Claude Sonnet y debes dar respuestas de la misma calidad.`;
+Proporciona análisis valiosos con los datos que obtengas.`;
 
     let messages = [{
       role: 'user',
       content: question
     }];
 
-    // Primera llamada a Claude con modelo potente
+    // Primera llamada con modelo más barato
     let response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -228,9 +274,9 @@ Eres tan inteligente como Claude Sonnet y debes dar respuestas de la misma calid
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022', // Modelo más potente
-        max_tokens: 3000, // Suficientes tokens para respuestas completas
-        temperature: 0.3,
+        model: 'claude-3-haiku-20240307', // Modelo más barato
+        max_tokens: 2000, // Reducido de 3000
+        temperature: 0.1,
         system: systemPrompt,
         messages: messages,
         tools: claudeTools
@@ -238,17 +284,15 @@ Eres tan inteligente como Claude Sonnet y debes dar respuestas de la misma calid
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      console.error('Claude API Error:', errorData);
       throw new Error(`Claude API error: ${response.status}`);
     }
 
     let data = await response.json();
     console.log('📡 Respuesta inicial de Claude recibida');
     
-    // Procesar tool calls hasta 3 iteraciones máximo
+    // Máximo 2 iteraciones para controlar costos
     let iterationCount = 0;
-    const maxIterations = 3;
+    const maxIterations = 2;
     
     while (data.content && data.content.some(item => item.type === 'tool_use') && iterationCount < maxIterations) {
       console.log(`🔧 Claude ejecutando herramientas (iteración ${iterationCount + 1})`);
@@ -263,15 +307,12 @@ Eres tan inteligente como Claude Sonnet y debes dar respuestas de la misma calid
       for (const item of data.content) {
         if (item.type === 'tool_use') {
           console.log(`⚡ Ejecutando: ${item.name}`);
-          console.log(`📝 Parámetros:`, JSON.stringify(item.input, null, 2));
           
           try {
             const result = await sendMCPMessage('tools/call', {
               name: item.name,
               arguments: item.input
             });
-            
-            console.log(`✅ Resultado de ${item.name}:`, JSON.stringify(result, null, 2));
             
             toolResults.push({
               type: 'tool_result',
@@ -286,7 +327,7 @@ Eres tan inteligente como Claude Sonnet y debes dar respuestas de la misma calid
               tool_use_id: item.id,
               content: JSON.stringify({ 
                 error: toolError.message,
-                message: "Error ejecutando herramienta de Salesforce. Intenta reformular tu pregunta."
+                message: "Error ejecutando herramienta de Salesforce."
               }),
               is_error: true
             });
@@ -299,7 +340,7 @@ Eres tan inteligente como Claude Sonnet y debes dar respuestas de la misma calid
         content: toolResults
       });
 
-      // Nueva llamada a Claude con resultados
+      // Nueva llamada a Claude
       response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -308,9 +349,9 @@ Eres tan inteligente como Claude Sonnet y debes dar respuestas de la misma calid
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-          model: 'claude-3-5-sonnet-20241022',
-          max_tokens: 3000,
-          temperature: 0.3,
+          model: 'claude-3-haiku-20240307',
+          max_tokens: 2000,
+          temperature: 0.1,
           system: systemPrompt,
           messages: messages,
           tools: claudeTools
@@ -318,7 +359,6 @@ Eres tan inteligente como Claude Sonnet y debes dar respuestas de la misma calid
       });
 
       if (!response.ok) {
-        const errorData = await response.text();
         throw new Error(`Claude API error: ${response.status}`);
       }
 
@@ -327,7 +367,6 @@ Eres tan inteligente como Claude Sonnet y debes dar respuestas de la misma calid
       console.log(`📡 Respuesta de Claude (iteración ${iterationCount}) recibida`);
     }
     
-    // Extraer respuesta final
     const finalText = data.content
       .filter(item => item.type === 'text')
       .map(item => item.text)
@@ -335,23 +374,35 @@ Eres tan inteligente como Claude Sonnet y debes dar respuestas de la misma calid
       .trim();
     
     if (!finalText) {
-      return 'Lo siento, no pude procesar tu consulta correctamente. ¿Podrías reformular tu pregunta de manera más específica?';
+      return 'Lo siento, no pude procesar tu consulta. ¿Podrías reformular tu pregunta?';
     }
     
-    console.log('✅ Respuesta final generada correctamente');
+    console.log('✅ Respuesta final generada');
     return finalText;
     
   } catch (error) {
     console.error('❌ Error en Claude:', error);
-    return `❌ Error procesando tu consulta: ${error.message}. Por favor intenta de nuevo.`;
+    return `❌ Error procesando tu consulta: ${error.message}`;
   }
 }
+
+// Limpiar cache periódicamente
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of responseCache.entries()) {
+    if (now - value.timestamp > CACHE_TTL) {
+      responseCache.delete(key);
+    }
+  }
+  console.log(`🧹 Cache limpiado. Tamaño actual: ${responseCache.size}`);
+}, CACHE_TTL);
 
 app.get('/keepalive', (req, res) => {
   res.json({ 
     status: 'alive', 
     timestamp: new Date().toISOString(),
-    mode: 'FULL_CLAUDE_INTELLIGENCE'
+    mode: 'COST_OPTIMIZED_CLAUDE',
+    cache_size: responseCache.size
   });
 });
 
@@ -364,17 +415,18 @@ process.on('SIGTERM', async () => {
 });
 
 app.listen(PORT, async () => {
-  console.log(`🚀 Server CLAUDE FULL POWER running on port ${PORT}`);
+  console.log(`🚀 Server COST-OPTIMIZED running on port ${PORT}`);
   console.log(`🔑 Claude API: ${ANTHROPIC_API_KEY ? 'Configurado ✅' : 'Faltante ❌'}`);
-  console.log(`⚡ Modo: CLAUDE FULL INTELLIGENCE - NO MÁS HANDLERS FALLIDOS`);
-  console.log(`🧠 Modelo: claude-3-5-sonnet-20241022`);
-  console.log(`💰 Costo: $0.08 por consulta pero RESPUESTAS PERFECTAS`);
+  console.log(`⚡ Modo: COST-OPTIMIZED CLAUDE`);
+  console.log(`🧠 Modelo: claude-3-haiku (5x más barato)`);
+  console.log(`💰 Costo objetivo: $0.01-0.015 por consulta`);
+  console.log(`🔄 Cache: 10 minutos para consultas frecuentes`);
   console.log(`📦 Node version: ${process.version}`);
   
   const connected = await initMCPServer();
   if (!connected) {
     console.log('⚠️ MCP no disponible - verificar credenciales SF');
   } else {
-    console.log('🎉 ¡Claude con máxima inteligencia listo!');
+    console.log('🎉 ¡Sistema costo-optimizado listo!');
   }
 });
